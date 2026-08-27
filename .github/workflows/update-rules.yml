@@ -1,38 +1,50 @@
-name: Update AdBlock Rules
+name: Update Rules
 
+# 允许手动触发（Actions 页面点 Run workflow）
 on:
-  schedule:
-    # 每天凌晨 2 点（UTC）运行
-    - cron: '0 2 * * *'
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
+  # push 到 main 或 master 自动触发
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'sources.txt'
+      - 'scripts/**'
+      - '.github/workflows/**'
+
+  # 每天 UTC 2:00（北京时间 10:00）定时跑
+  schedule:
+    - cron: '0 2 * * *'
+
+# 必须：允许 Actions 写回仓库
 permissions:
   contents: write
 
 jobs:
-  update:
+  build:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-        
-      - name: Set up environment
+        with:
+          # 关键：用 token 才能 push
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 环境
         run: |
-          sudo apt-get update
-          sudo apt-get install -y curl sed gawk grep coreutils
-          
-      - name: Make script executable
+          sudo apt-get update -qq
+          sudo apt-get install -y curl sed gawk grep coreutils python3
+
+      - name: 合并规则
         run: |
           chmod +x scripts/merge.sh
-          
-      - name: Run merge script
-        run: |
           bash scripts/merge.sh
-          
-      - name: Commit and push changes
+
+      - name: 提交
         if: success()
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: auto-update merged rules [skip ci]"
+          commit_message: "chore: 自动更新合并规则 [skip ci]"
           file_pattern: "dist/merged.txt"
