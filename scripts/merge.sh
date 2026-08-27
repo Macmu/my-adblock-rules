@@ -1,67 +1,52 @@
 #!/bin/bash
-set -e
-
 echo "========================================"
-echo "  AdBlock Rules Merger"
+echo "  AdBlock Rules Merger (simple)"
 echo "========================================"
 
-# 输出目录
-OUTPUT_DIR="dist"
-OUTPUT_FILE="$OUTPUT_DIR/merged.txt"
-TMP_FILE="$OUTPUT_DIR/.tmp_merged.txt"
+mkdir -p dist
+: > dist/.tmp.txt
 
-mkdir -p "$OUTPUT_DIR"
-> "$TMP_FILE"
-
-# 读取 sources.txt
-SOURCES_FILE="sources.txt"
-if [ ! -f "$SOURCES_FILE" ]; then
-    echo "❌ 找不到 $SOURCES_FILE"
+if [ ! -f sources.txt ]; then
+    echo "❌ 找不到 sources.txt"
     exit 1
 fi
 
-COUNT=0
-FAIL=0
-while IFS= read -r url || [ -n "$url" ]; do
-    # 跳过空行和注释
-    [[ -z "$url" ]] && continue
-    [[ "$url" =~ ^[[:space:]]*# ]] && continue
+count=0
+while IFS= read -r line; do
+    url=$(echo "$line" | tr -d '\r')
+    [ -z "$url" ] && continue
+    case "$url" in \#*) continue ;; esac
 
-    ((COUNT++))
-    echo "[$COUNT] 正在下载: $url"
+    count=$((count + 1))
+    echo "[$count] $url"
 
-    # 关键改动：curl 失败时记录但不退出
-    if curl -sL --connect-timeout 15 --max-time 60 "$url" 2>/dev/null | \
-        sed -e 's/[[:space:]]*#.*//' \
-            -e 's/!.*//' \
-            -e 's/||//' \
-            -e 's/\^//' \
-            -e 's/127\.0\.0\.1[[:space:]]*//' \
-            -e 's/0\.0\.0\.0[[:space:]]*//' \
-            -e 's/::[[:space:]]*//' | \
-        awk 'NF {print $NF}' | \
-        grep -vE '^\s*$' | \
-        grep -vE '^(\.|/|\[|\*)' | \
-        sed 's/^\.//' >> "$TMP_FILE"; then
-        echo "  ✅ 成功"
-    else
-        ((FAIL++))
-        echo "  ⚠️ 下载失败（跳过）"
-    fi
+    # 极简清洗：只做最安全的操作
+    curl -sL --connect-timeout 15 --max-time 120 "$url" 2>/dev/null \
+      | sed 's/#.*//; s/!.*//; s/||//g; s/\^//g' \
+      | sed 's/[[:space:]]*127\.0\.0\.1[[:space:]]*//g' \
+      | sed 's/[[:space:]]*0\.0\.0\.0[[:space:]]*//g' \
+      | awk 'NF {print $NF}' \
+      | grep -v '^\s*$' \
+      >> dist/.tmp.txt
 
-done < "$SOURCES_FILE"
+    echo "    done (exit=$?)"
 
-# 去重、排序、输出（即使 TMP 为空也不报错）
-if [ -s "$TMP_FILE" ]; then
-    sort -u "$TMP_FILE" | grep -v '^$' > "$OUTPUT_FILE"
-    RULE_COUNT=$(wc -l < "$OUTPUT_FILE")
-    echo "========================================"
-    echo "  ✅ 合并完成！共 $RULE_COUNT 条规则（成功 $COUNT，失败 $FAIL）"
-    echo "  输出: $OUTPUT_FILE"
-    echo "========================================"
+done < sources.txt
+
+echo "=== 下载的原始行数 ==="
+wc -l dist/.tmp.txt
+
+# 去重排序
+sort -u dist/.tmp.txt | grep -v '^$' > dist/merged.txt
+rm -f dist/.tmp.txt
+
+lines=$(wc -l < dist/merged.txt | tr -d ' ')
+echo "=== 去重后规则数: $lines ==="
+
+if [ "$lines" -gt 0 ]; then
+    echo "✅ 成功"
+    exit 0
 else
-    echo "❌ 没有成功下载任何规则，请检查网络或 sources.txt 中的 URL"
+    echo "❌ 没有下载到任何规则"
     exit 1
 fi
-
-rm -f "$TMP_FILE"
