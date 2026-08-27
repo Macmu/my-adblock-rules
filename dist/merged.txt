@@ -1,11 +1,11 @@
 # ============================================
 #  AdBlock 合并规则
-#  生成时间: 2026-08-27 16:00:31 UTC
-#  总条数: 436617
-#  黑名单: 433775 | 白名单: 542 | 其他: 2300
+#  生成时间: 2026-08-27 16:03:00 UTC
+#  总条数: 436611
+#  黑名单: 433775 | 白名单: 542 | 软件注释: 2294
 # ============================================
 
-# ==================== 黑名单 (广告/跟踪/恶意) ====================
+# ==================== 黑名单 ====================
 
 *.lijie.*/*_*?$third-party
 */blsx_*_*_*?*$third-party
@@ -433783,7 +433783,7 @@ zol.com.cn##A.dingtong.xianshiyouhui
 ||zzzx1-862777969.ap-east-1.elb.amazonaws.com^! Description: 反馈群538268498
 
 
-# ==================== 白名单 (例外规则 @@) ====================
+# ==================== 白名单 ====================
 @@-ds.metric.gstatic.com^|
 @@.cn:8005/$domain=www.ntdm9.com|www.mxdm9.com|mxdm6.com|ntdm6.com
 @@.com/o.js$domain=2biqu.com
@@ -434328,8 +434328,7 @@ zol.com.cn##A.dingtong.xianshiyouhui
 @@||ylog.huya.com^
 
 
-# ==================== 其他 (注释/软件说明/无法分类) ====================
-!
+# ==================== 软件说明注释 ====================
 !                                   http://jwduahujge.ru/0741703015aacf2.3.1.1.1.l80.js
 !                                   http://nddmcconmqsy.ru/7492512165a41313.3.n.2.1.l60.js
 ! !#include https://adguardteam.github.io/cname-trackers/data/ads/ads2_bid.txt
@@ -434367,7 +434366,6 @@ zol.com.cn##A.dingtong.xianshiyouhui
 ! --- Yahoo
 ! --- Yandex
 ! --- YouTube
-! --- 追踪/数据收集（非内容）---
 ! 2cnt.net : pl02.prolitteris.2cnt.net disguised trackers
 ! ====== 360壁纸 PC客户端 完整拦截 ======
 ! ========== APP接口、商城、静态资源、风控埋点子域名 ==========
@@ -435321,7 +435319,6 @@ zol.com.cn##A.dingtong.xianshiyouhui
 !思必驰 
 !新浪微博跳转及恶意诈骗广告
 !﻿[个人维护]
-#
 #  TODO: Check for breakages (used by tamasha.com), investigate into more tracking
 #  TODO: Remove it, Used by dlfox.com
 # ----
@@ -435475,7 +435472,6 @@ zol.com.cn##A.dingtong.xianshiyouhui
 # tavoos.net
 # title:          Frellwit's Swedish Hosts File
 # آمیتیس?
-# 作者：海哥
 # 全由海哥自己制作
 # 头条相关
 # 屏蔽iOS/iPadOS OTA更新
@@ -436190,7 +436186,6 @@ zol.com.cn##A.dingtong.xianshiyouhui
 #0.0.0.0 qzonestyle.gtimg.cn #QQ空间装扮
 #0.0.0.0 reading.snssdk.com  #番茄小说v5.3初始化断网
 #0.0.0.0 sdk-api.beizi.biz  #据说123云盘卡开屏？反正我测试都没卡过。
-#0.0.0.0 sofire.baidu.com  #百度慧推,用户数据收集与分析,误伤贴吧lite的一键签到
 #0.0.0.0 static.122.gov.cn
 #0.0.0.0 t1.a.market.xiaomi.com
 #0.0.0.0 t1.market.mi-img.com
@@ -436491,7 +436486,6 @@ zol.com.cn##A.dingtong.xianshiyouhui
 #更新日期：260116
 #有道精品课(误伤首页横幅图片，其他图未知)
 #有道词典
-#未知来源 广告/日志
 #杂七杂八
 #杂七杂八（不含开屏）
 #杯子广告
