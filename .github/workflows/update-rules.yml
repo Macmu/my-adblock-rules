@@ -1,0 +1,33 @@
+name: Update AdBlock Rules
+
+on:
+  schedule:
+    # 每天凌晨 2 点（UTC）运行，北京时间上午 10 点
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # 允许手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl
+          
+      - name: Run merge script
+        run: |
+          bash scripts/merge.sh
+          
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: auto-update merged rules [skip ci]"
+          file_pattern: "dist/merged.txt"
