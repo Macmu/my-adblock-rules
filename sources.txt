@@ -1,4 +1,3 @@
-https://raw.githubusercontent.com/AdguardTeam/AdGuardSDNSFilter/master/Filters/filter.txt
 https://anti-ad.net/easylist.txt
 https://cdn.jsdelivr.net/gh/Cats-Team/AdRules@main/dns.txt
 https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@main/adblock/pro.txt
@@ -11,3 +10,9 @@ https://cdn.jsdelivr.net/gh/Kuner-mw/DNS-Kuner@main/FilterRules/blacklist.txt
 https://cdn.jsdelivr.net/gh/qq5460168/dangchu@main/black.txt
 https://cdn.jsdelivr.net/gh/AdguardTeam/HostlistsRegistry@master/assets/filter_30.txt
 https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-agh.txt
+https://easylist-downloads.adblockplus.org/easylistchina.txt
+https://raw.githubusercontent.com/cjx82630/cjxlist/master/cjx-annoyance.txt
+https://raw.githubusercontent.com/xinggsf/Adblock-Plus-Rule/master/rule.txt
+https://raw.githubusercontent.com/dromara/ad-rule/main/rule.txt
+https://raw.githubusercontent.com/badmojr/1Hosts/master/Pro/hosts.txt
+https://raw.githubusercontent.com/jdlingyu/ad-wars/master/hosts
