@@ -1,194 +1,160 @@
 #!/bin/bash
 # ============================================================
-#  AdBlock Rules Merger - 智能精简版
-#  策略：按频次 + 启发式筛选，不硬卡数量
+#  AdBlock Rules Merger - 流式精简版 v5 (带实时进度)
 # ============================================================
-
 set -euo pipefail
 
-# ---- 配置 ----
-DOWNLOAD_TIMEOUT=45          # 单个文件下载超时（秒）
-MAX_PARALLEL=3               # 最大并发下载数
-SCRIPT_TIMEOUT=420           # 脚本总超时 7 分钟
-MIN_FREQ_TO_KEEP=2           # 出现次数 ≥ 此值的无条件保留
-MAX_SEGMENTS_FOR_RARE=4      # 罕见域名最多允许几段（超过则丢弃）
+# ---- 加载进度模块 ----
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=progress.sh
+source "$SCRIPT_DIR/progress.sh"
 
-# 广告/追踪关键词（命中则保留）
+# ---- 配置 ----
+DOWNLOAD_TIMEOUT=45
+MAX_PARALLEL=3
+SCRIPT_TIMEOUT=480
+MIN_FREQ_TO_KEEP=2
+MAX_SEGMENTS_FOR_RARE=4
+
 AD_KEYWORDS="ad|ads|advert|adserver|adtech|track|tracking|analytics|metric|pixel"
 AD_KEYWORDS="$AD_KEYWORDS|doubleclick|googlesyndication|googleadservices|pubmatic|taboola|outbrain"
 AD_KEYWORDS="$AD_KEYWORDS|teads|adform|criteo|openx|rubicon|appnexus|amazon-adsystem"
-AD_KEYWORDS="$AD_KEYWORDS|scorecardresearch|quantserve|bluekai|krxd|lijit|media"
-AD_KEYWORDS="$AD_KEYWORDS|popup|popunder|banner|sponsor|affiliate"
+AD_KEYWORDS="$AD_KEYWORDS|scorecardresearch|quantserve|bluekai|krxd|lijit|popup|popunder"
+AD_KEYWORDS="$AD_KEYWORDS|banner|sponsor|affiliate|marketing"
 
-# ---- 超时保护 ----
+# 超时守护
 (
   sleep $SCRIPT_TIMEOUT
-  echo "❌ 脚本超过 ${SCRIPT_TIMEOUT}s，强制终止"
+  echo "❌ 超时 ${SCRIPT_TIMEOUT}s，强制终止"
   pkill -P $$ 2>/dev/null || true
 ) &
 TIMER_PID=$!
-
-cleanup() { kill $TIMER_PID 2>/dev/null || true; rm -rf "$TMPDIR" 2>/dev/null || true; }
+cleanup() {
+  kill $TIMER_PID 2>/dev/null || true
+  rm -rf "$TMPDIR" 2>/dev/null || true
+  progress_done 2>/dev/null || true
+}
 trap cleanup EXIT
 
-# ---- 初始化 ----
 echo "========================================"
-echo "  AdBlock Rules Merger (智能精简版)"
+echo "  AdBlock Rules Merger (v5 带进度显示)"
 echo "  时间: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "========================================"
 
-WORKDIR="$(cd "$(dirname "$0")/.." && pwd)"
+WORKDIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DISTDIR="$WORKDIR/dist"
 mkdir -p "$DISTDIR"
 TMPDIR=$(mktemp -d)
 
-# ---- 下载函数 ----
-download_url() {
-  local idx="$1" url="$2" out="$TMPDIR/src_$idx.txt"
-  echo -n "  [$idx] "
-  if curl -sL --connect-timeout 10 --max-time $DOWNLOAD_TIMEOUT -o "$out" "$url" 2>/dev/null \
-     && [ -s "$out" ]; then
-    local bytes=$(wc -c < "$out")
-    echo "✅ ${bytes} bytes"
-    # 立即提取域名，减少内存占用
-    extract_domains "$out" >> "$TMPDIR/extracted_all.txt" 2>/dev/null || true
-  else
-    echo "❌ 跳过"
-  fi
-}
-export -f download_url
-export TMPDIR AD_KEYWORDS
-
-# 从单个规则文件提取域名（输出：一行一个域名）
+# 提取域名函数
 extract_domains() {
   local input="$1"
-  [ -f "$input" ] || return
-  # 1) ||domain^ 或 @@||domain^
-  grep -oP '^\s*@?@?\|\|[a-zA-Z0-9._-]+\^?' "$input" 2>/dev/null \
-    | sed 's/^@*||//; s/\^$//'
-  # 2) hosts: 0.0.0.0 / 127.0.0.1 / ::  domain
-  grep -E '^\s*(0\.0\.0\.0|127\.0\.0\.1|::)\s+' "$input" 2>/dev/null | awk '{print $2}'
-  # 3) 纯域名行
-  grep -E '^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$' "$input" 2>/dev/null
+  [ -s "$input" ] || return
+  grep -oP '^\s*@?@?\|\|[a-zA-Z0-9._-]+\^?' "$input" 2>/dev/null | sed 's/^@*||//; s/\^$//' || true
+  grep -E '^\s*(0\.0\.0\.0|127\.0\.0\.1|::)\s+' "$input" 2>/dev/null | awk '{print $2}' || true
+  grep -E '^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$' "$input" 2>/dev/null || true
 }
 export -f extract_domains
 
-# ---- 读取 sources.txt ----
 [ -f "$WORKDIR/sources.txt" ] || { echo "❌ 找不到 sources.txt"; exit 1; }
 
-: > "$TMPDIR/extracted_all.txt"
+# 读取 URL 列表
+mapfile -t URLS < <(grep -vE '^\s*(#|$)' "$WORKDIR/sources.txt" | sed 's/\r//')
+TOTAL_SOURCES=${#URLS[@]}
 
-idx=0
-while IFS= read -r line; do
-  url=$(echo "$line" | tr -d '\r' | xargs)
-  [ -z "$url" ] && continue
-  case "$url" in \#*) continue ;; esac
-  idx=$((idx + 1))
-  echo "下载: [$idx] $url"
-  download_url "$idx" "$url" &
-  while [ $(jobs -r | wc -l) -ge $MAX_PARALLEL ]; do wait -n 2>/dev/null || true; done
-done < "$WORKDIR/sources.txt"
+# 总步骤数 = 下载 + 合并 + 排序 + 筛选 + 输出 = TOTAL_SOURCES + 4
+TOTAL_STEPS=$((TOTAL_SOURCES + 4))
+progress_init $TOTAL_STEPS
+
+# ---- 步骤 1~N：下载 + 提取 ----
+progress_set 0 "初始化" "共 $TOTAL_SOURCES 个规则源"
+
+WORKER=0
+for i in "${!URLS[@]}"; do
+  url="${URLS[$i]}"
+  idx=$((i + 1))
+  (
+    out="$TMPDIR/dl_${idx}_$$.txt"
+    echo "STEP:下载 $idx/$TOTAL_SOURCES|$url" > /dev/null  # 不在这里上报，避免竞争
+    if curl -sL --connect-timeout 10 --max-time $DOWNLOAD_TIMEOUT -o "$out" "$url" 2>/dev/null && [ -s "$out" ]; then
+      bytes=$(wc -c < "$out")
+      count=$(extract_domains "$out" | tee "$TMPDIR/ext_${idx}_$$.txt" | wc -l)
+      # 上报进度（通过管道）
+      [ -n "$PROG_FIFO" ] && echo "STEP:✅ $bytes bytes, $count 域名|$url" > "$PROG_FIFO" 2>/dev/null || true
+    else
+      [ -n "$PROG_FIFO" ] && echo "STEP:❌ 跳过|$url" > "$PROG_FIFO" 2>/dev/null || true
+      rm -f "$out"
+    fi
+  ) &
+  WORKER=$((WORKER + 1))
+  if [ $WORKER -ge $MAX_PARALLEL ]; then
+    wait -n 2>/dev/null || true
+    WORKER=$((WORKER - 1))
+  fi
+done
 wait
 
-EXTRACTED=$(wc -l < "$TMPDIR/extracted_all.txt" 2>/dev/null || echo 0)
-echo ""
-echo "========================================"
-echo "  提取到的域名总数（含重复）: $EXTRACTED"
-echo "========================================"
+# ---- 步骤 N+1：合并 ----
+progress_step "合并提取结果" ""
+cat "$TMPDIR"/ext_*.txt 2>/dev/null > "$TMPDIR/all_domains.txt" || true
+EXTRACTED=$(wc -l < "$TMPDIR/all_domains.txt" 2>/dev/null || echo 0)
+progress_set $TOTAL_STEPS "合并完成" "提取域名总数（含重复）: $EXTRACTED"
 
-# ---- 统计频次 ----
-echo "统计频次..."
-# 输出格式：count<TAB>domain
-sort "$TMPDIR/extracted_all.txt" | uniq -c | awk '{print $1"\t"$2}' \
-  | sort -rn > "$TMPDIR/freq.txt" 2>/dev/null || true
-
+# ---- 步骤 N+2：排序统计 ----
+progress_step "排序 & 统计频次" ""
+sort --parallel=2 --buffer-size=200M "$TMPDIR/all_domains.txt" 2>/dev/null \
+  | uniq -c \
+  | awk '{print $1"\t"$2}' \
+  | sort -rn \
+  > "$TMPDIR/freq.txt" 2>/dev/null || true
 TOTAL_UNIQUE=$(wc -l < "$TMPDIR/freq.txt" 2>/dev/null || echo 0)
-echo "  去重后唯一域名: $TOTAL_UNIQUE"
 
-# ---- 智能筛选 ----
-echo "智能筛选..."
-
-# 分三档：
-#   1) 高频（>= MIN_FREQ_TO_KEEP）：无条件保留
-#   2) 低频但含广告关键词：保留
-#   3) 其他低频：丢弃
+# ---- 步骤 N+3：智能筛选 ----
+progress_step "智能筛选" "保留频次≥$MIN_FREQ_TO_KEEP + 广告关键词"
 awk -v minfreq=$MIN_FREQ_TO_KEEP \
     -v maxseg=$MAX_SEGMENTS_FOR_RARE \
     -v keywords="$AD_KEYWORDS" '
-BEGIN {
-  kept = 0; dropped = 0;
-}
 {
   split($0, parts, "\t");
-  count = parts[1];
+  count = parts[1] + 0;
   domain = parts[2];
   if (domain == "") next;
-
-  # 档1：高频，无条件保留
-  if (count >= minfreq) {
-    kept++;
-    print domain;
-    next;
-  }
-
-  # 低频：段数检查
+  if (count >= minfreq) { kept++; print domain; next; }
   dots = gsub(/\./, ".", domain);
   segments = dots + 1;
-  if (segments > maxseg) { dropped++; next; }   # 太深的子域，丢弃
-
-  # 低频：长度检查
+  if (segments > maxseg) { dropped++; next; }
   if (length(domain) > 63) { dropped++; next; }
-
-  # 低频：排除以数字为主的（IP 之类）
   if (domain ~ /^[0-9.]+$/) { dropped++; next; }
-
-  # 档2：含广告/追踪关键词 → 保留
-  if (tolower(domain) ~ keywords) {
-    kept++;
-    print domain;
-    next;
-  }
-
-  # 档3：二级域名（常见基础域名），保留
+  if (tolower(domain) ~ keywords) { kept++; print domain; next; }
   if (segments <= 2) { kept++; print domain; next; }
-
-  # 其他低频长尾：丢弃
   dropped++;
 }
-END {
-  print "[STATS] kept=" kept " dropped=" dropped > "/dev/stderr";
-}
+END { print "[STATS] kept=" kept " dropped=" dropped > "/dev/stderr"; }
 ' "$TMPDIR/freq.txt" 2> "$TMPDIR/stats.txt" \
   | sort -u > "$TMPDIR/final_domains.txt" || true
-
 FINAL=$(wc -l < "$TMPDIR/final_domains.txt" 2>/dev/null || echo 0)
-echo "  保留: $FINAL 条"
-cat "$TMPDIR/stats.txt" 2>/dev/null || true
 
-# ---- 输出最终文件 ----
+# ---- 步骤 N+4：输出 ----
+progress_step "生成最终文件" "原始 $TOTAL_UNIQUE → 精简 $FINAL"
 {
   echo "# ============================================"
   echo "#  AdGuardHome DNS 过滤规则（智能精简）"
   echo "#  生成时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
   echo "#  原始唯一域名: $TOTAL_UNIQUE"
   echo "#  精简后: $FINAL"
-  echo "#  策略: 频次≥${MIN_FREQ_TO_KEEP} 全保留 + 广告关键词 + 二级域名"
   echo "# ============================================"
   echo ""
   echo "# ==================== 黑名单 ===================="
   sed 's/^/||/' "$TMPDIR/final_domains.txt" | sed 's/$/^/'
 } > "$DISTDIR/merged.txt"
 
+progress_done
+
 echo ""
 echo "========================================"
 echo "  ✅ 完成！"
-echo "  原始唯一域名: $TOTAL_UNIQUE"
-echo "  精简后规则: $FINAL"
+echo "  原始唯一: $TOTAL_UNIQUE → 精简后: $FINAL"
 echo "  输出: $DISTDIR/merged.txt"
 echo "========================================"
-
-echo ""
-echo "前 10 条样例:"
 head -10 "$DISTDIR/merged.txt"
-
 exit 0
