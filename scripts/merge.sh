@@ -19,7 +19,7 @@ SIMPLIFY_TO_ETLD=1         # 是否启用主域名简化（方案四）
 WHITELIST_FILTER=1         # 是否过滤白名单中的国外常用域名
 
 # 保护列表：这些主域名不会被简化，保留原始子域名规则，避免误伤
-PROTECTED_DOMAINS='google\.com|youtube\.com|facebook\.com|twitter\.com|amazon\.com|taobao\.com|tmall\.com|360\.cn|baidu\.com|qq\.com|weibo\.com|sohu\.com|sina\.com\.cn|163\.com|126\.com|aliyun\.com|cloudflare\.com|github\.com|apple\.com|microsoft\.com|office\.com|live\.com|msn\.com|yahoo\.com|bing\.com|wikipedia\.org|stackoverflow\.com|zhihu\.com|bilibili\.com|douyin\.com|toutiao\.com|kuaishou\.com|jd\.com|pinduoduo\.com'
+PROTECTED_DOMAINS='google.com|youtube.com|facebook.com|twitter.com|amazon.com|taobao.com|tmall.com|360.cn|baidu.com|qq.com|weibo.com|sohu.com|sina.com.cn|163.com|126.com|aliyun.com|cloudflare.com|github.com|apple.com|microsoft.com|office.com|live.com|msn.com|yahoo.com|bing.com|wikipedia.org|stackoverflow.com|zhihu.com|bilibili.com|douyin.com|toutiao.com|kuaishou.com|jd.com|pinduoduo.com'
 
 # 白名单过滤：国外常见域名正则，匹配到的白名单将被丢弃
 FOREIGN_REGEX='google|facebook|twitter|youtube|ytimg|gstatic|googleapis|gvt1|ggpht|amazon|aws|azure|microsoft|windows|office|live|msn|apple|icloud|itunes|netflix|nflx|spotify|whatsapp|instagram|linkedin|pinterest|snapchat|reddit|twimg|tiktok|github|gitlab|cloudflare|akamai|cloudfront|fastly'
