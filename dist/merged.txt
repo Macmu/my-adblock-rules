@@ -1,8 +1,24 @@
 # ============================================
 #  AdGuardHome DNS 过滤规则
-#  生成时间: 2026-08-28 01:57:42 UTC
-#  规则总数: 268527
+#  生成时间: 2026-08-28 02:09:27 UTC
+#  规则总数: 268503
 # ============================================
+
+# ==================== 来源统计 ====================
+#   18586 条 - https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-agh.txt
+#   69 条 - https://cdn.jsdelivr.net/gh/Kuner-mw/DNS-Kuner@main/FilterRules/blacklist.txt
+#   0 条 - https://raw.githubusercontent.com/AdguardTeam/AdGuardSDNSFilter/master/Filters/filter.txt
+#   2822 条 - https://cdn.jsdelivr.net/gh/qq5460168/dangchu@main/black.txt
+#   37139 条 - https://cdn.jsdelivr.net/gh/AdguardTeam/HostlistsRegistry@master/assets/filter_30.txt
+#   4554 条 - https://cdn.jsdelivr.net/gh/damengzhu/banad@main/jiekouAD.txt
+#   4929 条 - https://cdn.jsdelivr.net/gh/2Gardon/SM-Ad-FuckU-hosts@master/SMAdHosts
+#   226021 条 - https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@main/adblock/pro.txt
+#   94019 条 - https://anti-ad.net/easylist.txt
+#   12808 条 - https://cdn.jsdelivr.net/gh/2771936993/HG@main/hg1.txt
+#   409 条 - https://cdn.jsdelivr.net/gh/3316134332/qy-Ads-Rule@main/black.txt
+#   671 条 - https://cdn.jsdelivr.net/gh/afwfv/DD-AD@main/rule/DD-AD.txt
+#   197375 条 - https://cdn.jsdelivr.net/gh/Cats-Team/AdRules@main/dns.txt
+# =================================================
 
 # ==================== 黑名单 ====================
 ||*-ad-sign.byteimg.com^
@@ -26,8 +42,6 @@
 ||0--0.info^
 ||0--4.com^
 ||0--d.com^
-||0-0-0-0-0-0-0-0-0-0-0-0-0-18-0-0-0-0-0-0-0-0-0-0-0-0-0.info^
-||0-0-0-0-0-0-0-0-0-0-0-0-0-33-0-0-0-0-0-0-0-0-0-0-0-0-0.info^
 ||0-0-0checkmate.com^
 ||0-0-7.site^
 ||0-0.fr^
@@ -79,7 +93,6 @@
 ||000-anti.com^
 ||000.pe^
 ||00000.uno^
-||0000000000000.com^
 ||000000000000000.info^
 ||00000001.com^
 ||0000056.com^
@@ -106,7 +119,6 @@
 ||000194.com^
 ||0001xnxx.com^
 ||0002-metrics1-drcn-dt-dbankcloud-cn.geac.dbankedge.cn^
-||00020101021226430012hk.com^
 ||000205.com^
 ||000214.com^
 ||0002345.com^
@@ -528,7 +540,6 @@
 ||0123-movies.com^
 ||01230123.com^
 ||0123456789.biz^
-||012345678901.com^
 ||01234movies.net^
 ||012369.shop^
 ||012397.com^
@@ -798,7 +809,6 @@
 ||024hotel.com^
 ||024news.com^
 ||024trip.com^
-||025-377-6150.com^
 ||02513.com^
 ||02515.com^
 ||02526.com^
@@ -1957,7 +1967,6 @@
 ||1-8-0.org^
 ||1-800-555-date.com^
 ||1-800-555-lady.com^
-||1-800-669-0000.com^
 ||1-800-all-girls.com^
 ||1-800-ass-sexx.com^
 ||1-800-ass-tits.com^
@@ -2497,7 +2506,6 @@
 ||1027nashicon.com^
 ||1027nashicon.net^
 ||1028.me^
-||102816695819af8794301023.co^
 ||102879d8d6c40fb292e01023.co^
 ||102887.com^
 ||1028f.com^
@@ -2824,9 +2832,6 @@
 ||110polizei110.de^
 ||110words.com^
 ||111-design.com^
-||1111111111111111.com^
-||1111111111111111111111111111111111111111111111111111111111.com^
-||1111111111111111111111111111111111111111111111111111111111111.com^
 ||111112js.com^
 ||11111a.net^
 ||11112door.net^
@@ -2964,7 +2969,6 @@
 ||1181898.com^
 ||118252.com^
 ||118490.cc^
-||11861291192168111186129119216811118612911921681111861291.com^
 ||118678.com^
 ||1187531871.rsc.cdn77.org^
 ||1187788.com^
@@ -3742,7 +3746,6 @@
 ||1414.hexa.su^
 ||141545.com^
 ||14157.com^
-||141592653589793238462643383279502884197169399375105820974944592.com^
 ||1417.oadz.com^
 ||14195.com^
 ||141happy.com^
@@ -3854,7 +3857,6 @@
 ||150main.net^
 ||1510thezone.com^
 ||1514.info^
-||1516257611221.com^
 ||151743.com^
 ||151jj.com^
 ||151py.com^
@@ -4073,7 +4075,6 @@
 ||16zz.co^
 ||17.huanqiu.com^
 ||1701g.com^
-||1711141131131.xyz^
 ||171328482-wszystkie.shop^
 ||1717.1000uc.com^
 ||1717.gg^
@@ -4278,7 +4279,6 @@
 ||188188188188b.com^
 ||188555.com^
 ||188724.com^
-||188ad.215631851349.cc^
 ||188api.com^
 ||188betwin.net^
 ||188dse02.pro^
@@ -4378,7 +4378,6 @@
 ||18yyav.com^
 ||18zaa.com^
 ||18zipai.info^
-||19-59-4-24126.vip^
 ||19-59-dt-dgl.cc^
 ||1900196654.p04.elqsandbox.com^
 ||1900fourthst.com^
@@ -5709,7 +5708,6 @@
 ||27-theproject.com^
 ||270.at^
 ||2701.oadz.com^
-||270278609-2020004278-462904544-440202503325--570202500372x-usps.com^
 ||271071.com^
 ||2714zmn.ink^
 ||2718vqn.top^
@@ -5803,7 +5801,6 @@
 ||29831-icloud.com^
 ||2997fa5a20.com^
 ||29991h.com^
-||299ad.5080133167601.cc^
 ||299f.net^
 ||29aa46e34082.top^
 ||29acdc6212.com^
@@ -6411,7 +6408,6 @@
 ||3327.top^
 ||332hike.com^
 ||33326t.com^
-||3333333333333.xyz^
 ||33338888.com^
 ||3333withfox.net^
 ||333542.com^
@@ -7934,8 +7930,6 @@
 ||506.io^
 ||5066.net^
 ||50763.com^
-||5078690667377.com^
-||5082402074754.com^
 ||5083da2b5a.38a6848c49.com^
 ||508554.shop^
 ||50860722.com^
@@ -9516,7 +9510,6 @@
 ||74598.com^
 ||746fr229.com^
 ||7470c4cda5.com^
-||747ad.5086672730431.cc^
 ||74856924.com^
 ||74952.com^
 ||749558.com^
@@ -10381,7 +10374,6 @@
 ||8886611.cn^
 ||888811x.com^
 ||88887e.com^
-||88888888888888888888888888888888888888888888888888888888.com^
 ||8888queue.com^
 ||888993.xyz^
 ||888b.gay^
