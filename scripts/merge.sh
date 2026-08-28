@@ -87,6 +87,9 @@ for i in "${!URLS[@]}"; do
         # 5. 兜底
         grep -E '\|\|' "$out" 2>/dev/null | grep -E '\^' >> "$ext" || true
 
+        # 初步清理：去除以 ! 开头的注释行（可能误提取）
+        sed -i '/^[[:space:]]*!/d' "$ext" 2>/dev/null || true
+
         sort -u -o "$ext" "$ext" 2>/dev/null || true
         count=$(wc -l < "$ext" 2>/dev/null || echo 0)
         TOTAL_EXTRACTED=$((TOTAL_EXTRACTED + count))
@@ -107,76 +110,129 @@ KW_REGEX="${KW_REGEX}|outbrain|teads|adform|criteo|openx|rubicon|appnexus"
 KW_REGEX="${KW_REGEX}|amazon-adsystem|scorecardresearch|quantserve|bluekai|krxd"
 KW_REGEX="${KW_REGEX}|lijit|popup|popunder|banner|sponsor|affiliate|marketing"
 
-# 编写 AWK 脚本（不包含硬编码变量）
+# 编写 AWK 脚本（区分黑白名单，增加合法性检查）
 cat > "$TMPDIR/filter.awk" << 'AWKEOF'
 {
     line = $0
+    sub(/^[ \t]+/, "", line)   # 去除前导空格
     if (line == "") next
+
+    # 判断是否为白名单（@@ 开头）
+    is_whitelist = (line ~ /^@@/) ? 1 : 0
 
     # 提取基础键（||domain^）
     if (match(line, /\|\|[a-zA-Z0-9*._-]+\^/)) {
         key = substr(line, RSTART, RLENGTH)
-        if (key in lines) {
-            lines[key] = lines[key] "\n" line
+        domain = substr(key, 3, length(key)-3)   # 去掉 || 和 ^
+
+        # ---- 域名合法性检查 ----
+        # 必须包含至少一个点且顶级域名长度≥2
+        if (domain !~ /^[a-zA-Z0-9*.-]+\.[a-zA-Z]{2,}$/) next
+        # 长度限制（防止超长垃圾域名）
+        if (length(domain) > 100) next
+        # 必须包含至少一个字母（过滤纯数字域名）
+        if (domain !~ /[a-zA-Z]/) next
+
+        # 根据黑白名单分别存储
+        if (is_whitelist) {
+            if (key in w_lines) {
+                w_lines[key] = w_lines[key] "\n" line
+            } else {
+                w_lines[key] = line
+            }
+            w_count[key]++
         } else {
-            lines[key] = line
+            if (key in b_lines) {
+                b_lines[key] = b_lines[key] "\n" line
+            } else {
+                b_lines[key] = line
+            }
+            b_count[key]++
         }
-        count[key]++
-        domain = substr(key, 3, length(key) - 3)
+
+        # 记录域名段数（用于过滤）
         segs = split(domain, arr, ".")
-        seg_count[key] = segs
+        if (is_whitelist) {
+            w_seg_count[key] = segs
+        } else {
+            b_seg_count[key] = segs
+        }
     }
 }
 
 END {
-    kept = 0
-    dropped = 0
-    for (key in lines) {
+    # 处理黑名单
+    kept_black = 0
+    dropped_black = 0
+    for (key in b_lines) {
         keep = 0
-        c = count[key]
-        segs = seg_count[key]
+        c = b_count[key]
+        segs = b_seg_count[key]
 
         if (c >= minfreq) keep = 1
         else if (segs <= maxseg && tolower(key) ~ kw_regex) keep = 1
         else if (segs <= 2) keep = 1
 
         if (keep) {
-            print lines[key]
-            kept++
+            print b_lines[key] > blacklist_file
+            kept_black++
         } else {
-            dropped++
+            dropped_black++
         }
     }
-    print "[STATS] 保留=" kept " 丢弃=" dropped > "/dev/stderr"
+
+    # 处理白名单（保留全部合法规则，不应用频率/关键词过滤）
+    kept_white = 0
+    for (key in w_lines) {
+        print w_lines[key] > whitelist_file
+        kept_white++
+    }
+
+    # 输出统计信息到 stderr
+    printf "[STATS] 黑名单保留=%d 丢弃=%d，白名单保留=%d\n", kept_black, dropped_black, kept_white > "/dev/stderr"
 }
 AWKEOF
 
-# 执行 AWK 过滤（通过 -v 传递变量）
+# 定义输出文件路径
+BLACKLIST_FILE="$TMPDIR/blacklist.txt"
+WHITELIST_FILE="$TMPDIR/whitelist.txt"
+> "$BLACKLIST_FILE"
+> "$WHITELIST_FILE"
+
+# 执行 AWK 过滤
 awk -v minfreq="$MIN_FREQ_TO_KEEP" \
     -v maxseg="$MAX_SEGMENTS_FOR_RARE" \
     -v kw_regex="$KW_REGEX" \
+    -v blacklist_file="$BLACKLIST_FILE" \
+    -v whitelist_file="$WHITELIST_FILE" \
     -f "$TMPDIR/filter.awk" \
-    "$TMPDIR"/ext_*.txt > "$TMPDIR/filtered.txt" 2> "$TMPDIR/stats.txt"
+    "$TMPDIR"/ext_*.txt 2> "$TMPDIR/stats.txt"
 AWK_EXIT=$?
 
-# 容错：AWK 失败或输出为空时回退到简单合并
-if [ $AWK_EXIT -ne 0 ] || [ ! -s "$TMPDIR/filtered.txt" ]; then
+# 容错：AWK 失败或黑白名单均为空时回退到简单合并
+if [ $AWK_EXIT -ne 0 ] || { [ ! -s "$BLACKLIST_FILE" ] && [ ! -s "$WHITELIST_FILE" ]; }; then
     echo "⚠️ AWK 过滤失败或无输出，回退到 sort -u 合并"
-    cat "$TMPDIR"/ext_*.txt 2>/dev/null | sort -u > "$TMPDIR/filtered.txt"
-    FILTERED_COUNT=$(wc -l < "$TMPDIR/filtered.txt")
-    echo "[STATS] 回退模式：保留=$FILTERED_COUNT 丢弃=0" > "$TMPDIR/stats.txt"
+    cat "$TMPDIR"/ext_*.txt 2>/dev/null | sort -u > "$BLACKLIST_FILE"
+    > "$WHITELIST_FILE"  # 清空白名单
+    echo "[STATS] 回退模式：所有规则均视为黑名单，保留=$(wc -l < "$BLACKLIST_FILE")" > "$TMPDIR/stats.txt"
 fi
 
-# 最终去重并输出
-sort -u "$TMPDIR/filtered.txt" > "$DISTDIR/merged.txt.tmp"
-FINAL=$(wc -l < "$DISTDIR/merged.txt.tmp" 2>/dev/null || echo 0)
+# 分别去重
+sort -u -o "$BLACKLIST_FILE" "$BLACKLIST_FILE" 2>/dev/null || true
+sort -u -o "$WHITELIST_FILE" "$WHITELIST_FILE" 2>/dev/null || true
+
+# 统计行数
+BLACK_COUNT=$(wc -l < "$BLACKLIST_FILE" 2>/dev/null || echo 0)
+WHITE_COUNT=$(wc -l < "$WHITELIST_FILE" 2>/dev/null || echo 0)
+FINAL=$((BLACK_COUNT + WHITE_COUNT))
 
 # 显示统计信息
 echo "  $(cat "$TMPDIR/stats.txt" 2>/dev/null)"
-echo "  最终输出行数: $FINAL"
+echo "  最终输出：黑名单 $BLACK_COUNT 条，白名单 $WHITE_COUNT 条，总计 $FINAL 条"
 
 # ========== 输出最终文件 ==========
-progress_step "生成最终文件" "规则数: $FINAL"
+progress_step "生成最终文件" "黑名单: $BLACK_COUNT，白名单: $WHITE_COUNT，总计: $FINAL"
+
 {
     echo "# ============================================"
     echo "#  AdGuardHome DNS 过滤规则"
@@ -185,15 +241,21 @@ progress_step "生成最终文件" "规则数: $FINAL"
     echo "# ============================================"
     echo ""
     echo "# ==================== 黑名单 ===================="
-    cat "$DISTDIR/merged.txt.tmp"
+    if [ -s "$BLACKLIST_FILE" ]; then
+        cat "$BLACKLIST_FILE"
+    fi
+    echo ""
+    if [ -s "$WHITELIST_FILE" ]; then
+        echo "# ==================== 白名单 ===================="
+        cat "$WHITELIST_FILE"
+    fi
 } > "$DISTDIR/merged.txt"
 
-rm -f "$DISTDIR/merged.txt.tmp" 2>/dev/null || true
 progress_done
 
 echo ""
 echo "========================================"
-echo "  ✅ 完成！规则数: $FINAL"
+echo "  ✅ 完成！规则总数: $FINAL"
 echo "  输出: $DISTDIR/merged.txt"
 echo "========================================"
 head -10 "$DISTDIR/merged.txt"
