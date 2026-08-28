@@ -12,6 +12,11 @@ SCRIPT_TIMEOUT=480
 MIN_FREQ_TO_KEEP=2
 MAX_SEGMENTS_FOR_RARE=4
 
+# 新增可配置项
+ENABLE_NOISE_FILTER=1      # 是否启用噪音过滤（默认开启）
+ADD_SOURCE_STATS=1         # 是否在文件头部添加来源统计（默认开启）
+SIMPLIFY_TO_ETLD=0         # 是否只保留主域名（eTLD+1），默认关闭
+
 # ========== 超时保护 ==========
 timeout_handler() {
     echo "❌ 脚本超时（${SCRIPT_TIMEOUT}秒），终止" >&2
@@ -55,12 +60,14 @@ echo "临时目录: $TMPDIR"
 [ -f "$WORKDIR/sources.txt" ] || { echo "❌ 找不到 sources.txt"; exit 1; }
 mapfile -t URLS < <(grep -vE '^\s*(#|$)' "$WORKDIR/sources.txt" | sed 's/\r//')
 TOTAL_SOURCES=${#URLS[@]}
-TOTAL_STEPS=$((TOTAL_SOURCES + 2))
+# 修正步骤总数：初始化1 + 下载N + 智能过滤1 + 生成文件1 = N+3
+TOTAL_STEPS=$((TOTAL_SOURCES + 3))
 progress_init $TOTAL_STEPS
 progress_step "初始化" "共 $TOTAL_SOURCES 个规则源"
 
 # 用于累计提取的总行数
 TOTAL_EXTRACTED=0
+declare -A SOURCE_COUNTS   # 记录每个源的提取数量
 
 for i in "${!URLS[@]}"; do
     url="${URLS[$i]}"
@@ -93,10 +100,12 @@ for i in "${!URLS[@]}"; do
         sort -u -o "$ext" "$ext" 2>/dev/null || true
         count=$(wc -l < "$ext" 2>/dev/null || echo 0)
         TOTAL_EXTRACTED=$((TOTAL_EXTRACTED + count))
+        SOURCE_COUNTS["$url"]=$count
         progress_step "✅ ${bytes} bytes, ${count} 条" "$url"
     else
         progress_step "❌ 跳过（重试 ${RETRY_MAX} 次失败）" "$url"
         rm -f "$out"
+        SOURCE_COUNTS["$url"]=0
     fi
 done
 
@@ -110,7 +119,7 @@ KW_REGEX="${KW_REGEX}|outbrain|teads|adform|criteo|openx|rubicon|appnexus"
 KW_REGEX="${KW_REGEX}|amazon-adsystem|scorecardresearch|quantserve|bluekai|krxd"
 KW_REGEX="${KW_REGEX}|lijit|popup|popunder|banner|sponsor|affiliate|marketing"
 
-# 编写 AWK 脚本（区分黑白名单，增加合法性检查）
+# 编写 AWK 脚本（区分黑白名单，增加合法性检查与噪音过滤）
 cat > "$TMPDIR/filter.awk" << 'AWKEOF'
 {
     line = $0
@@ -132,6 +141,24 @@ cat > "$TMPDIR/filter.awk" << 'AWKEOF'
         if (length(domain) > 100) next
         # 必须包含至少一个字母（过滤纯数字域名）
         if (domain !~ /[a-zA-Z]/) next
+
+        # ---- 噪音过滤（可选） ----
+        if (noise_filter) {
+            total_len = length(domain)
+            letter_count = 0
+            digit_count = 0
+            for (i=1; i<=total_len; i++) {
+                ch = substr(domain, i, 1)
+                if (ch ~ /[a-zA-Z]/) letter_count++
+                else if (ch ~ /[0-9]/) digit_count++
+            }
+            # 规则1：域名长度 >15 且字母占比 <20%
+            if (total_len > 15 && letter_count / total_len < 0.2) next
+            # 规则2：纯数字或数字+短横组合且长度 >10
+            if (domain ~ /^[0-9\-]+$/ && total_len > 10) next
+            # 规则3：连续相同字符超过4个
+            if (domain ~ /(.)\1{4,}/) next
+        }
 
         # 根据黑白名单分别存储
         if (is_whitelist) {
@@ -174,14 +201,26 @@ END {
         else if (segs <= 2) keep = 1
 
         if (keep) {
-            print b_lines[key] > blacklist_file
+            # 如果启用 eTLD 简化，仅输出主域名规则
+            if (simplify_etld) {
+                # 简单处理：取最后两段作为主域名，忽略子域名
+                n = split(substr(key,3,length(key)-3), parts, ".")
+                if (n >= 2) {
+                    simple_domain = parts[n-1] "." parts[n]
+                    print "||" simple_domain "^" > blacklist_file
+                } else {
+                    print b_lines[key] > blacklist_file
+                }
+            } else {
+                print b_lines[key] > blacklist_file
+            }
             kept_black++
         } else {
             dropped_black++
         }
     }
 
-    # 处理白名单（保留全部合法规则，不应用频率/关键词过滤）
+    # 处理白名单（保留全部合法规则，不应用频率/关键词过滤，也不简化）
     kept_white = 0
     for (key in w_lines) {
         print w_lines[key] > whitelist_file
@@ -205,6 +244,8 @@ awk -v minfreq="$MIN_FREQ_TO_KEEP" \
     -v kw_regex="$KW_REGEX" \
     -v blacklist_file="$BLACKLIST_FILE" \
     -v whitelist_file="$WHITELIST_FILE" \
+    -v noise_filter="$ENABLE_NOISE_FILTER" \
+    -v simplify_etld="$SIMPLIFY_TO_ETLD" \
     -f "$TMPDIR/filter.awk" \
     "$TMPDIR"/ext_*.txt 2> "$TMPDIR/stats.txt"
 AWK_EXIT=$?
@@ -240,6 +281,15 @@ progress_step "生成最终文件" "黑名单: $BLACK_COUNT，白名单: $WHITE_
     echo "#  规则总数: $FINAL"
     echo "# ============================================"
     echo ""
+    if [ "$ADD_SOURCE_STATS" -eq 1 ]; then
+        echo "# ==================== 来源统计 ===================="
+        for url in "${!SOURCE_COUNTS[@]}"; do
+            count="${SOURCE_COUNTS[$url]}"
+            echo "#   $count 条 - $url"
+        done
+        echo "# ================================================="
+        echo ""
+    fi
     echo "# ==================== 黑名单 ===================="
     if [ -s "$BLACKLIST_FILE" ]; then
         cat "$BLACKLIST_FILE"
