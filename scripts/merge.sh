@@ -15,7 +15,14 @@ MAX_SEGMENTS_FOR_RARE=4
 # 新增可配置项
 ENABLE_NOISE_FILTER=1      # 是否启用噪音过滤（默认开启）
 ADD_SOURCE_STATS=1         # 是否在文件头部添加来源统计（默认开启）
-SIMPLIFY_TO_ETLD=0         # 是否只保留主域名（eTLD+1），默认关闭
+SIMPLIFY_TO_ETLD=1         # 是否启用主域名简化（方案四）
+WHITELIST_FILTER=1         # 是否过滤白名单中的国外常用域名
+
+# 保护列表：这些主域名不会被简化，保留原始子域名规则，避免误伤
+PROTECTED_DOMAINS='google\.com|youtube\.com|facebook\.com|twitter\.com|amazon\.com|taobao\.com|tmall\.com|360\.cn|baidu\.com|qq\.com|weibo\.com|sohu\.com|sina\.com\.cn|163\.com|126\.com|aliyun\.com|cloudflare\.com|github\.com|apple\.com|microsoft\.com|office\.com|live\.com|msn\.com|yahoo\.com|bing\.com|wikipedia\.org|stackoverflow\.com|zhihu\.com|bilibili\.com|douyin\.com|toutiao\.com|kuaishou\.com|jd\.com|pinduoduo\.com'
+
+# 白名单过滤：国外常见域名正则，匹配到的白名单将被丢弃
+FOREIGN_REGEX='google|facebook|twitter|youtube|ytimg|gstatic|googleapis|gvt1|ggpht|amazon|aws|azure|microsoft|windows|office|live|msn|apple|icloud|itunes|netflix|nflx|spotify|whatsapp|instagram|linkedin|pinterest|snapchat|reddit|twimg|tiktok|github|gitlab|cloudflare|akamai|cloudfront|fastly'
 
 # ========== 超时保护 ==========
 timeout_handler() {
@@ -60,14 +67,13 @@ echo "临时目录: $TMPDIR"
 [ -f "$WORKDIR/sources.txt" ] || { echo "❌ 找不到 sources.txt"; exit 1; }
 mapfile -t URLS < <(grep -vE '^\s*(#|$)' "$WORKDIR/sources.txt" | sed 's/\r//')
 TOTAL_SOURCES=${#URLS[@]}
-# 修正步骤总数：初始化1 + 下载N + 智能过滤1 + 生成文件1 = N+3
 TOTAL_STEPS=$((TOTAL_SOURCES + 3))
 progress_init $TOTAL_STEPS
 progress_step "初始化" "共 $TOTAL_SOURCES 个规则源"
 
 # 用于累计提取的总行数
 TOTAL_EXTRACTED=0
-declare -A SOURCE_COUNTS   # 记录每个源的提取数量
+declare -A SOURCE_COUNTS
 
 for i in "${!URLS[@]}"; do
     url="${URLS[$i]}"
@@ -80,21 +86,16 @@ for i in "${!URLS[@]}"; do
         bytes=$(wc -c < "$out")
 
         # ---------- 提取规则（兼容多种格式） ----------
-        # 1. AdBlock 标准：||domain^ 可能带 @@ 和 $修饰符
         grep -E '^\s*(@@)?\|\|[a-zA-Z0-9*._-]+\^' "$out" 2>/dev/null >> "$ext" || true
-        # 2. Hosts 格式
         grep -E '^\s*(0\.0\.0\.0|127\.0\.0\.1|::)\s+[a-zA-Z0-9._-]+' "$out" 2>/dev/null \
             | awk '{print "||" $2 "^"}' >> "$ext" || true
-        # 3. dnsmasq 格式
         grep -E '^\s*address=/[^/]+/' "$out" 2>/dev/null \
             | sed -n 's/^address=\/\([^/]*\)\/.*/||\1^/p' >> "$ext" || true
-        # 4. 纯域名行
         grep -E '^[a-zA-Z0-9*._-]+\.[a-zA-Z]{2,}$' "$out" 2>/dev/null \
             | sed 's/^/||/; s/$/^/' >> "$ext" || true
-        # 5. 兜底
         grep -E '\|\|' "$out" 2>/dev/null | grep -E '\^' >> "$ext" || true
 
-        # 初步清理：去除以 ! 开头的注释行（可能误提取）
+        # 去除注释行
         sed -i '/^[[:space:]]*!/d' "$ext" 2>/dev/null || true
 
         sort -u -o "$ext" "$ext" 2>/dev/null || true
@@ -119,48 +120,46 @@ KW_REGEX="${KW_REGEX}|outbrain|teads|adform|criteo|openx|rubicon|appnexus"
 KW_REGEX="${KW_REGEX}|amazon-adsystem|scorecardresearch|quantserve|bluekai|krxd"
 KW_REGEX="${KW_REGEX}|lijit|popup|popunder|banner|sponsor|affiliate|marketing"
 
-# 编写 AWK 脚本（区分黑白名单，增加合法性检查与噪音过滤）
+# 编写 AWK 脚本
 cat > "$TMPDIR/filter.awk" << 'AWKEOF'
 {
     line = $0
-    sub(/^[ \t]+/, "", line)   # 去除前导空格
+    sub(/^[ \t]+/, "", line)
     if (line == "") next
 
-    # 判断是否为白名单（@@ 开头）
     is_whitelist = (line ~ /^@@/) ? 1 : 0
 
-    # 提取基础键（||domain^）
     if (match(line, /\|\|[a-zA-Z0-9*._-]+\^/)) {
         key = substr(line, RSTART, RLENGTH)
-        domain = substr(key, 3, length(key)-3)   # 去掉 || 和 ^
+        domain = substr(key, 3, length(key)-3)
 
-        # ---- 域名合法性检查 ----
-        # 必须包含至少一个点且顶级域名长度≥2
+        # 域名合法性检查
         if (domain !~ /^[a-zA-Z0-9*.-]+\.[a-zA-Z]{2,}$/) next
-        # 长度限制（防止超长垃圾域名）
         if (length(domain) > 100) next
-        # 必须包含至少一个字母（过滤纯数字域名）
         if (domain !~ /[a-zA-Z]/) next
 
-        # ---- 噪音过滤（可选） ----
+        # 噪音过滤（可选）
         if (noise_filter) {
             total_len = length(domain)
             letter_count = 0
-            digit_count = 0
             for (i=1; i<=total_len; i++) {
                 ch = substr(domain, i, 1)
                 if (ch ~ /[a-zA-Z]/) letter_count++
-                else if (ch ~ /[0-9]/) digit_count++
             }
-            # 规则1：域名长度 >15 且字母占比 <20%
             if (total_len > 15 && letter_count / total_len < 0.2) next
-            # 规则2：纯数字或数字+短横组合且长度 >10
             if (domain ~ /^[0-9\-]+$/ && total_len > 10) next
-            # 规则3：连续相同字符超过4个
             if (domain ~ /(.)\1{4,}/) next
         }
 
-        # 根据黑白名单分别存储
+        # 白名单额外过滤：如果是白名单且开启了过滤，检查是否匹配国外常用域名
+        if (is_whitelist && whitelist_filter) {
+            if (domain ~ foreign_regex) {
+                whitelist_dropped++
+                next
+            }
+        }
+
+        # 存储规则
         if (is_whitelist) {
             if (key in w_lines) {
                 w_lines[key] = w_lines[key] "\n" line
@@ -177,7 +176,7 @@ cat > "$TMPDIR/filter.awk" << 'AWKEOF'
             b_count[key]++
         }
 
-        # 记录域名段数（用于过滤）
+        # 记录段数
         segs = split(domain, arr, ".")
         if (is_whitelist) {
             w_seg_count[key] = segs
@@ -201,13 +200,18 @@ END {
         else if (segs <= 2) keep = 1
 
         if (keep) {
-            # 如果启用 eTLD 简化，仅输出主域名规则
             if (simplify_etld) {
-                # 简单处理：取最后两段作为主域名，忽略子域名
-                n = split(substr(key,3,length(key)-3), parts, ".")
+                # 提取主域名（eTLD+1）
+                domain_only = substr(key, 3, length(key)-3)
+                n = split(domain_only, parts, ".")
                 if (n >= 2) {
                     simple_domain = parts[n-1] "." parts[n]
-                    print "||" simple_domain "^" > blacklist_file
+                    # 如果简化后的主域名在保护列表中，输出原始规则（不简化）
+                    if (simple_domain ~ protected_domains) {
+                        print b_lines[key] > blacklist_file
+                    } else {
+                        print "||" simple_domain "^" > blacklist_file
+                    }
                 } else {
                     print b_lines[key] > blacklist_file
                 }
@@ -220,19 +224,17 @@ END {
         }
     }
 
-    # 处理白名单（保留全部合法规则，不应用频率/关键词过滤，也不简化）
+    # 处理白名单（不简化，但已经过滤掉国外常用域名）
     kept_white = 0
     for (key in w_lines) {
         print w_lines[key] > whitelist_file
         kept_white++
     }
 
-    # 输出统计信息到 stderr
-    printf "[STATS] 黑名单保留=%d 丢弃=%d，白名单保留=%d\n", kept_black, dropped_black, kept_white > "/dev/stderr"
+    printf "[STATS] 黑名单保留=%d 丢弃=%d，白名单保留=%d 过滤=%d\n", kept_black, dropped_black, kept_white, whitelist_dropped > "/dev/stderr"
 }
 AWKEOF
 
-# 定义输出文件路径
 BLACKLIST_FILE="$TMPDIR/blacklist.txt"
 WHITELIST_FILE="$TMPDIR/whitelist.txt"
 > "$BLACKLIST_FILE"
@@ -246,28 +248,28 @@ awk -v minfreq="$MIN_FREQ_TO_KEEP" \
     -v whitelist_file="$WHITELIST_FILE" \
     -v noise_filter="$ENABLE_NOISE_FILTER" \
     -v simplify_etld="$SIMPLIFY_TO_ETLD" \
+    -v whitelist_filter="$WHITELIST_FILTER" \
+    -v foreign_regex="$FOREIGN_REGEX" \
+    -v protected_domains="$PROTECTED_DOMAINS" \
     -f "$TMPDIR/filter.awk" \
     "$TMPDIR"/ext_*.txt 2> "$TMPDIR/stats.txt"
 AWK_EXIT=$?
 
-# 容错：AWK 失败或黑白名单均为空时回退到简单合并
+# 容错回退
 if [ $AWK_EXIT -ne 0 ] || { [ ! -s "$BLACKLIST_FILE" ] && [ ! -s "$WHITELIST_FILE" ]; }; then
     echo "⚠️ AWK 过滤失败或无输出，回退到 sort -u 合并"
     cat "$TMPDIR"/ext_*.txt 2>/dev/null | sort -u > "$BLACKLIST_FILE"
-    > "$WHITELIST_FILE"  # 清空白名单
+    > "$WHITELIST_FILE"
     echo "[STATS] 回退模式：所有规则均视为黑名单，保留=$(wc -l < "$BLACKLIST_FILE")" > "$TMPDIR/stats.txt"
 fi
 
-# 分别去重
 sort -u -o "$BLACKLIST_FILE" "$BLACKLIST_FILE" 2>/dev/null || true
 sort -u -o "$WHITELIST_FILE" "$WHITELIST_FILE" 2>/dev/null || true
 
-# 统计行数
 BLACK_COUNT=$(wc -l < "$BLACKLIST_FILE" 2>/dev/null || echo 0)
 WHITE_COUNT=$(wc -l < "$WHITELIST_FILE" 2>/dev/null || echo 0)
 FINAL=$((BLACK_COUNT + WHITE_COUNT))
 
-# 显示统计信息
 echo "  $(cat "$TMPDIR/stats.txt" 2>/dev/null)"
 echo "  最终输出：黑名单 $BLACK_COUNT 条，白名单 $WHITE_COUNT 条，总计 $FINAL 条"
 
