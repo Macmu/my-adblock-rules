@@ -1,15 +1,10 @@
 #!/bin/bash
-# ============================================================
-#  AdBlock Rules Merger - 流式精简版 v5 (带实时进度)
-# ============================================================
 set -euo pipefail
 
-# ---- 加载进度模块 ----
+# 加载进度模块
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=progress.sh
 source "$SCRIPT_DIR/progress.sh"
 
-# ---- 配置 ----
 DOWNLOAD_TIMEOUT=45
 MAX_PARALLEL=3
 SCRIPT_TIMEOUT=480
@@ -23,21 +18,13 @@ AD_KEYWORDS="$AD_KEYWORDS|scorecardresearch|quantserve|bluekai|krxd|lijit|popup|
 AD_KEYWORDS="$AD_KEYWORDS|banner|sponsor|affiliate|marketing"
 
 # 超时守护
-(
-  sleep $SCRIPT_TIMEOUT
-  echo "❌ 超时 ${SCRIPT_TIMEOUT}s，强制终止"
-  pkill -P $$ 2>/dev/null || true
-) &
+( sleep $SCRIPT_TIMEOUT; echo "❌ 超时"; pkill -P $$ 2>/dev/null || true ) &
 TIMER_PID=$!
-cleanup() {
-  kill $TIMER_PID 2>/dev/null || true
-  rm -rf "$TMPDIR" 2>/dev/null || true
-  progress_done 2>/dev/null || true
-}
+cleanup() { kill $TIMER_PID 2>/dev/null || true; rm -rf "$TMPDIR" 2>/dev/null || true; progress_done 2>/dev/null || true; }
 trap cleanup EXIT
 
 echo "========================================"
-echo "  AdBlock Rules Merger (v5 带进度显示)"
+echo "  AdBlock Rules Merger (GitHub Actions 版)"
 echo "  时间: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "========================================"
 
@@ -46,7 +33,6 @@ DISTDIR="$WORKDIR/dist"
 mkdir -p "$DISTDIR"
 TMPDIR=$(mktemp -d)
 
-# 提取域名函数
 extract_domains() {
   local input="$1"
   [ -s "$input" ] || return
@@ -57,84 +43,85 @@ extract_domains() {
 export -f extract_domains
 
 [ -f "$WORKDIR/sources.txt" ] || { echo "❌ 找不到 sources.txt"; exit 1; }
-
-# 读取 URL 列表
 mapfile -t URLS < <(grep -vE '^\s*(#|$)' "$WORKDIR/sources.txt" | sed 's/\r//')
 TOTAL_SOURCES=${#URLS[@]}
-
-# 总步骤数 = 下载 + 合并 + 排序 + 筛选 + 输出 = TOTAL_SOURCES + 4
 TOTAL_STEPS=$((TOTAL_SOURCES + 4))
 progress_init $TOTAL_STEPS
-
-# ---- 步骤 1~N：下载 + 提取 ----
 progress_set 0 "初始化" "共 $TOTAL_SOURCES 个规则源"
 
+# ---- 下载 ----
 WORKER=0
 for i in "${!URLS[@]}"; do
   url="${URLS[$i]}"
   idx=$((i + 1))
   (
     out="$TMPDIR/dl_${idx}_$$.txt"
-    echo "STEP:下载 $idx/$TOTAL_SOURCES|$url" > /dev/null  # 不在这里上报，避免竞争
     if curl -sL --connect-timeout 10 --max-time $DOWNLOAD_TIMEOUT -o "$out" "$url" 2>/dev/null && [ -s "$out" ]; then
       bytes=$(wc -c < "$out")
       count=$(extract_domains "$out" | tee "$TMPDIR/ext_${idx}_$$.txt" | wc -l)
-      # 上报进度（通过管道）
-      [ -n "$PROG_FIFO" ] && echo "STEP:✅ $bytes bytes, $count 域名|$url" > "$PROG_FIFO" 2>/dev/null || true
+      [ -n "$PROG_FIFO" ] && echo "STEP:✅ ${bytes} bytes, ${count} 域名|$url" > "$PROG_FIFO" 2>/dev/null || true
     else
       [ -n "$PROG_FIFO" ] && echo "STEP:❌ 跳过|$url" > "$PROG_FIFO" 2>/dev/null || true
       rm -f "$out"
     fi
   ) &
   WORKER=$((WORKER + 1))
-  if [ $WORKER -ge $MAX_PARALLEL ]; then
-    wait -n 2>/dev/null || true
-    WORKER=$((WORKER - 1))
-  fi
+  if [ $WORKER -ge $MAX_PARALLEL ]; then wait -n 2>/dev/null || true; WORKER=$((WORKER - 1)); fi
 done
 wait
 
-# ---- 步骤 N+1：合并 ----
+# ---- 合并 ----
 progress_step "合并提取结果" ""
 cat "$TMPDIR"/ext_*.txt 2>/dev/null > "$TMPDIR/all_domains.txt" || true
 EXTRACTED=$(wc -l < "$TMPDIR/all_domains.txt" 2>/dev/null || echo 0)
 progress_set $TOTAL_STEPS "合并完成" "提取域名总数（含重复）: $EXTRACTED"
 
-# ---- 步骤 N+2：排序统计 ----
-progress_step "排序 & 统计频次" ""
-sort --parallel=2 --buffer-size=200M "$TMPDIR/all_domains.txt" 2>/dev/null \
-  | uniq -c \
-  | awk '{print $1"\t"$2}' \
-  | sort -rn \
-  > "$TMPDIR/freq.txt" 2>/dev/null || true
-TOTAL_UNIQUE=$(wc -l < "$TMPDIR/freq.txt" 2>/dev/null || echo 0)
+# ---- 排序统计（限制内存，避免 GitHub runner OOM）----
+progress_step "排序 & 统计频次" "限制内存 300M"
+sort -S 300M --parallel=2 -o "$TMPDIR/sorted.txt" "$TMPDIR/all_domains.txt" 2>/dev/null || \
+  sort -o "$TMPDIR/sorted.txt" "$TMPDIR/all_domains.txt" 2>/dev/null || true
 
-# ---- 步骤 N+3：智能筛选 ----
-progress_step "智能筛选" "保留频次≥$MIN_FREQ_TO_KEEP + 广告关键词"
-awk -v minfreq=$MIN_FREQ_TO_KEEP \
-    -v maxseg=$MAX_SEGMENTS_FOR_RARE \
-    -v keywords="$AD_KEYWORDS" '
+awk '
 {
-  split($0, parts, "\t");
-  count = parts[1] + 0;
-  domain = parts[2];
-  if (domain == "") next;
-  if (count >= minfreq) { kept++; print domain; next; }
-  dots = gsub(/\./, ".", domain);
-  segments = dots + 1;
-  if (segments > maxseg) { dropped++; next; }
-  if (length(domain) > 63) { dropped++; next; }
-  if (domain ~ /^[0-9.]+$/) { dropped++; next; }
-  if (tolower(domain) ~ keywords) { kept++; print domain; next; }
-  if (segments <= 2) { kept++; print domain; next; }
-  dropped++;
+  if ($0 == prev) { count++ }
+  else {
+    if (prev != "") print count "\t" prev
+    prev = $0; count = 1
+  }
 }
-END { print "[STATS] kept=" kept " dropped=" dropped > "/dev/stderr"; }
-' "$TMPDIR/freq.txt" 2> "$TMPDIR/stats.txt" \
-  | sort -u > "$TMPDIR/final_domains.txt" || true
+END { if (prev != "") print count "\t" prev }
+' "$TMPDIR/sorted.txt" 2>/dev/null | sort -t$'\t' -k1,1rn > "$TMPDIR/freq.txt" 2>/dev/null || true
+
+TOTAL_UNIQUE=$(wc -l < "$TMPDIR/freq.txt" 2>/dev/null || echo 0)
+progress_set $TOTAL_STEPS "统计完成" "唯一域名: $TOTAL_UNIQUE"
+
+# ---- 筛选 ----
+progress_step "智能筛选" "保留频次≥$MIN_FREQ_TO_KEEP + 广告关键词"
+: > "$TMPDIR/final_domains.txt"
+kept=0; dropped=0
+while IFS=$'\t' read -r count domain; do
+  [ -z "$domain" ] && continue
+  if [ "$count" -ge "$MIN_FREQ_TO_KEEP" ] 2>/dev/null; then
+    echo "$domain" >> "$TMPDIR/final_domains.txt"; kept=$((kept+1)); continue
+  fi
+  segs=$(echo "$domain" | awk -F. '{print NF}')
+  if [ "$segs" -gt "$MAX_SEGMENTS_FOR_RARE" ] 2>/dev/null; then dropped=$((dropped+1)); continue; fi
+  if [ "${#domain}" -gt 63 ] 2>/dev/null; then dropped=$((dropped+1)); continue; fi
+  if echo "$domain" | grep -qE '^[0-9.]+$'; then dropped=$((dropped+1)); continue; fi
+  if echo "$domain" | grep -qiE "$AD_KEYWORDS"; then
+    echo "$domain" >> "$TMPDIR/final_domains.txt"; kept=$((kept+1)); continue
+  fi
+  if [ "$segs" -le 2 ] 2>/dev/null; then
+    echo "$domain" >> "$TMPDIR/final_domains.txt"; kept=$((kept+1))
+  else
+    dropped=$((dropped+1))
+  fi
+done < "$TMPDIR/freq.txt"
+
+sort -u "$TMPDIR/final_domains.txt" -o "$TMPDIR/final_domains.txt" 2>/dev/null || true
 FINAL=$(wc -l < "$TMPDIR/final_domains.txt" 2>/dev/null || echo 0)
 
-# ---- 步骤 N+4：输出 ----
+# ---- 输出 ----
 progress_step "生成最终文件" "原始 $TOTAL_UNIQUE → 精简 $FINAL"
 {
   echo "# ============================================"
@@ -149,10 +136,10 @@ progress_step "生成最终文件" "原始 $TOTAL_UNIQUE → 精简 $FINAL"
 } > "$DISTDIR/merged.txt"
 
 progress_done
-
 echo ""
 echo "========================================"
 echo "  ✅ 完成！"
+echo "  kept=$kept dropped=$dropped"
 echo "  原始唯一: $TOTAL_UNIQUE → 精简后: $FINAL"
 echo "  输出: $DISTDIR/merged.txt"
 echo "========================================"
