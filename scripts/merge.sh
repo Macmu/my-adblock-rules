@@ -9,6 +9,8 @@ DOWNLOAD_TIMEOUT=45
 RETRY_MAX=3
 RETRY_DELAY=2
 SCRIPT_TIMEOUT=480
+MIN_FREQ_TO_KEEP=2
+MAX_SEGMENTS_FOR_RARE=4
 
 # ========== 超时保护 ==========
 timeout_handler() {
@@ -71,35 +73,23 @@ for i in "${!URLS[@]}"; do
         bytes=$(wc -c < "$out")
 
         # ---------- 提取规则（兼容多种格式） ----------
-        # 1. AdBlock 标准：||domain^ 可能带 @@ 和 $修饰符，忽略行首空格
+        # 1. AdBlock 标准：||domain^ 可能带 @@ 和 $修饰符
         grep -E '^\s*(@@)?\|\|[a-zA-Z0-9*._-]+\^' "$out" 2>/dev/null >> "$ext" || true
-
-        # 2. Hosts 格式：0.0.0.0 domain 或 127.0.0.1 domain
+        # 2. Hosts 格式
         grep -E '^\s*(0\.0\.0\.0|127\.0\.0\.1|::)\s+[a-zA-Z0-9._-]+' "$out" 2>/dev/null \
             | awk '{print "||" $2 "^"}' >> "$ext" || true
-
-        # 3. dnsmasq 格式：address=/domain/ip 或 server=/domain/...
+        # 3. dnsmasq 格式
         grep -E '^\s*address=/[^/]+/' "$out" 2>/dev/null \
             | sed -n 's/^address=\/\([^/]*\)\/.*/||\1^/p' >> "$ext" || true
-
-        # 4. 纯域名行（每行一个域名，可能包含通配符）
+        # 4. 纯域名行
         grep -E '^[a-zA-Z0-9*._-]+\.[a-zA-Z]{2,}$' "$out" 2>/dev/null \
             | sed 's/^/||/; s/$/^/' >> "$ext" || true
-
-        # 5. 额外兜底：任何包含 || 且以 ^ 结尾的行（即使之前漏掉）
+        # 5. 兜底
         grep -E '\|\|' "$out" 2>/dev/null | grep -E '\^' >> "$ext" || true
 
-        # 去重当前提取结果（同一源内去重）
         sort -u -o "$ext" "$ext" 2>/dev/null || true
-
         count=$(wc -l < "$ext" 2>/dev/null || echo 0)
         TOTAL_EXTRACTED=$((TOTAL_EXTRACTED + count))
-        if [ "$count" -eq 0 ]; then
-            # 打印原始文件前几行供调试（保留文件，不删除）
-            echo "  ⚠️  未提取到任何规则，原始文件前 3 行："
-            head -3 "$out" | sed 's/^/      /' || true
-        fi
-
         progress_step "✅ ${bytes} bytes, ${count} 条" "$url"
     else
         progress_step "❌ 跳过（重试 ${RETRY_MAX} 次失败）" "$url"
@@ -107,34 +97,83 @@ for i in "${!URLS[@]}"; do
     fi
 done
 
-# ========== 检查提取结果 ==========
-if [ "$TOTAL_EXTRACTED" -eq 0 ]; then
-    echo "❌ 所有源均未提取到任何规则，请检查 sources.txt 中的 URL 是否有效或格式是否兼容。"
-    echo "临时文件保留在: $TMPDIR （可手动查看原始下载文件）"
-    # 不删除临时目录，方便调试
-    trap - EXIT
-    exit 1
-fi
-
 # ========== 智能过滤（AWK） ==========
 progress_step "智能过滤" "共 ${TOTAL_EXTRACTED} 条原始规则"
 
-# 构建关键词（此处略，同之前）
-KW_REGEX="ad|ads|advert|..."
-# 实际使用时请复制完整关键词串，此处为节省篇幅用省略
+# 构建关键词正则
+KW_REGEX="ad|ads|advert|adserver|adtech|track|tracking|analytics|metric|pixel"
+KW_REGEX="${KW_REGEX}|doubleclick|googlesyndication|googleadservices|pubmatic|taboola"
+KW_REGEX="${KW_REGEX}|outbrain|teads|adform|criteo|openx|rubicon|appnexus"
+KW_REGEX="${KW_REGEX}|amazon-adsystem|scorecardresearch|quantserve|bluekai|krxd"
+KW_REGEX="${KW_REGEX}|lijit|popup|popunder|banner|sponsor|affiliate|marketing"
 
+# 编写 AWK 脚本（不包含硬编码变量）
 cat > "$TMPDIR/filter.awk" << 'AWKEOF'
-# 过滤逻辑（保留规则，同之前增强版，此处略）
-# 实际使用时请复制完整的 AWK 代码
+{
+    line = $0
+    if (line == "") next
+
+    # 提取基础键（||domain^）
+    if (match(line, /\|\|[a-zA-Z0-9*._-]+\^/)) {
+        key = substr(line, RSTART, RLENGTH)
+        if (key in lines) {
+            lines[key] = lines[key] "\n" line
+        } else {
+            lines[key] = line
+        }
+        count[key]++
+        domain = substr(key, 3, length(key) - 3)
+        segs = split(domain, arr, ".")
+        seg_count[key] = segs
+    }
+}
+
+END {
+    kept = 0
+    dropped = 0
+    for (key in lines) {
+        keep = 0
+        c = count[key]
+        segs = seg_count[key]
+
+        if (c >= minfreq) keep = 1
+        else if (segs <= maxseg && tolower(key) ~ kw_regex) keep = 1
+        else if (segs <= 2) keep = 1
+
+        if (keep) {
+            print lines[key]
+            kept++
+        } else {
+            dropped++
+        }
+    }
+    print "[STATS] 保留=" kept " 丢弃=" dropped > "/dev/stderr"
+}
 AWKEOF
 
-# 合并所有提取文件，送入 AWK 处理
-cat "$TMPDIR"/ext_*.txt 2>/dev/null \
-    | awk -f "$TMPDIR/filter.awk" 2> "$TMPDIR/stats.txt" \
-    | sort -u > "$DISTDIR/merged.txt.tmp" 2>/dev/null || true
+# 执行 AWK 过滤（通过 -v 传递变量）
+awk -v minfreq="$MIN_FREQ_TO_KEEP" \
+    -v maxseg="$MAX_SEGMENTS_FOR_RARE" \
+    -v kw_regex="$KW_REGEX" \
+    -f "$TMPDIR/filter.awk" \
+    "$TMPDIR"/ext_*.txt > "$TMPDIR/filtered.txt" 2> "$TMPDIR/stats.txt"
+AWK_EXIT=$?
 
+# 容错：AWK 失败或输出为空时回退到简单合并
+if [ $AWK_EXIT -ne 0 ] || [ ! -s "$TMPDIR/filtered.txt" ]; then
+    echo "⚠️ AWK 过滤失败或无输出，回退到 sort -u 合并"
+    cat "$TMPDIR"/ext_*.txt 2>/dev/null | sort -u > "$TMPDIR/filtered.txt"
+    FILTERED_COUNT=$(wc -l < "$TMPDIR/filtered.txt")
+    echo "[STATS] 回退模式：保留=$FILTERED_COUNT 丢弃=0" > "$TMPDIR/stats.txt"
+fi
+
+# 最终去重并输出
+sort -u "$TMPDIR/filtered.txt" > "$DISTDIR/merged.txt.tmp"
 FINAL=$(wc -l < "$DISTDIR/merged.txt.tmp" 2>/dev/null || echo 0)
+
+# 显示统计信息
 echo "  $(cat "$TMPDIR/stats.txt" 2>/dev/null)"
+echo "  最终输出行数: $FINAL"
 
 # ========== 输出最终文件 ==========
 progress_step "生成最终文件" "规则数: $FINAL"
@@ -158,6 +197,4 @@ echo "  ✅ 完成！规则数: $FINAL"
 echo "  输出: $DISTDIR/merged.txt"
 echo "========================================"
 head -10 "$DISTDIR/merged.txt"
-# 保留临时目录用于调试（可选）
-# rm -rf "$TMPDIR"
 exit 0
