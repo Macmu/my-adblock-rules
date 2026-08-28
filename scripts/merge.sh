@@ -15,14 +15,14 @@ MAX_SEGMENTS_FOR_RARE=4
 # 新增可配置项
 ENABLE_NOISE_FILTER=1      # 是否启用噪音过滤（默认开启）
 ADD_SOURCE_STATS=1         # 是否在文件头部添加来源统计（默认开启）
-SIMPLIFY_TO_ETLD=1         # 是否启用主域名简化（方案四）
-WHITELIST_FILTER=1         # 是否过滤白名单中的国外常用域名
+SIMPLIFY_TO_ETLD=0         # 是否只保留主域名（eTLD+1），关闭以避免误伤
+WHITELIST_FILTER=0         # 是否过滤白名单中的国外常用域名，关闭以保留必要放行
 
-# 保护列表：这些主域名不会被简化，保留原始子域名规则，避免误伤
-PROTECTED_DOMAINS='google.com|youtube.com|facebook.com|twitter.com|amazon.com|taobao.com|tmall.com|360.cn|baidu.com|qq.com|weibo.com|sohu.com|sina.com.cn|163.com|126.com|aliyun.com|cloudflare.com|github.com|apple.com|microsoft.com|office.com|live.com|msn.com|yahoo.com|bing.com|wikipedia.org|stackoverflow.com|zhihu.com|bilibili.com|douyin.com|toutiao.com|kuaishou.com|jd.com|pinduoduo.com'
+# 保护列表（简化模式下使用，当前关闭，可保留为空）
+PROTECTED_DOMAINS=''
 
-# 白名单过滤：国外常见域名正则，匹配到的白名单将被丢弃
-FOREIGN_REGEX='google|facebook|twitter|youtube|ytimg|gstatic|googleapis|gvt1|ggpht|amazon|aws|azure|microsoft|windows|office|live|msn|apple|icloud|itunes|netflix|nflx|spotify|whatsapp|instagram|linkedin|pinterest|snapchat|reddit|twimg|tiktok|github|gitlab|cloudflare|akamai|cloudfront|fastly'
+# 白名单过滤正则（当前关闭，可保留为空）
+FOREIGN_REGEX=''
 
 # ========== 超时保护 ==========
 timeout_handler() {
@@ -151,7 +151,7 @@ cat > "$TMPDIR/filter.awk" << 'AWKEOF'
             if (domain ~ /(.)\1{4,}/) next
         }
 
-        # 白名单额外过滤：如果是白名单且开启了过滤，检查是否匹配国外常用域名
+        # 白名单额外过滤（当前关闭，跳过）
         if (is_whitelist && whitelist_filter) {
             if (domain ~ foreign_regex) {
                 whitelist_dropped++
@@ -200,32 +200,17 @@ END {
         else if (segs <= 2) keep = 1
 
         if (keep) {
-            if (simplify_etld) {
-                # 提取主域名（eTLD+1）
-                domain_only = substr(key, 3, length(key)-3)
-                n = split(domain_only, parts, ".")
-                if (n >= 2) {
-                    simple_domain = parts[n-1] "." parts[n]
-                    # 如果简化后的主域名在保护列表中，输出原始规则（不简化）
-                    if (simple_domain ~ protected_domains) {
-                        print b_lines[key] > blacklist_file
-                    } else {
-                        print "||" simple_domain "^" > blacklist_file
-                    }
-                } else {
-                    print b_lines[key] > blacklist_file
-                }
-            } else {
-                print b_lines[key] > blacklist_file
-            }
+            # 不简化，直接输出原始规则
+            print b_lines[key] > blacklist_file
             kept_black++
         } else {
             dropped_black++
         }
     }
 
-    # 处理白名单（不简化，但已经过滤掉国外常用域名）
+    # 处理白名单（不简化，不额外过滤）
     kept_white = 0
+    whitelist_dropped = 0
     for (key in w_lines) {
         print w_lines[key] > whitelist_file
         kept_white++
