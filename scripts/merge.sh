@@ -18,7 +18,7 @@ AD_KEYWORDS="$AD_KEYWORDS|banner|sponsor|affiliate|marketing"
 
 ( sleep $SCRIPT_TIMEOUT; echo "❌ 超时"; pkill -P $$ 2>/dev/null || true ) &
 TIMER_PID=$!
-cleanup() { kill $TIMER_PID 2>/dev/null || true; rm -rf "$TMPDIR" 2>/dev/null || true; progress_done 2>/dev/null || true; }
+cleanup() { kill $TIMER_PID 2>/dev/null || true; rm -rf "$TMPDIR" 2>/dev/null || true; }
 trap cleanup EXIT
 
 echo "========================================"
@@ -38,33 +38,39 @@ TOTAL_STEPS=$((TOTAL_SOURCES + 2))
 progress_init $TOTAL_STEPS
 progress_step "初始化" "共 $TOTAL_SOURCES 个规则源"
 
-# ---- 下载 ----
-WORKER=0
+# ---- 下载（串行，不用 wait -n，避免死锁）----
+extract_from_file() {
+  local input="$1"
+  [ -s "$input" ] || return
+  grep -oP '^\s*@?@?\|\|[a-zA-Z0-9._-]+\^?' "$input" 2>/dev/null | sed 's/^@*||//; s/\^$//' || true
+  grep -E '^\s*(0\.0\.0\.0|127\.0\.0\.1|::)\s+' "$input" 2>/dev/null | awk '{print $2}' || true
+  grep -E '^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$' "$input" 2>/dev/null || true
+}
+export -f extract_from_file
+
 for i in "${!URLS[@]}"; do
   url="${URLS[$i]}"
-  (
-    out="$TMPDIR/dl_${i}_$$.txt"
-    if curl -sL --connect-timeout 10 --max-time $DOWNLOAD_TIMEOUT -o "$out" "$url" 2>/dev/null && [ -s "$out" ]; then
-      bytes=$(wc -c < "$out")
-      count=$(grep -oP '^\s*@?@?\|\|[a-zA-Z0-9._-]+\^?' "$out" 2>/dev/null | sed 's/^@*||//; s/\^$//' | wc -l)
-      count=$((count + $(grep -E '^\s*(0\.0\.0\.0|127\.0\.0\.1|::)\s+' "$out" 2>/dev/null | wc -l)))
-      count=$((count + $(grep -E '^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$' "$out" 2>/dev/null | wc -l)))
-      grep -oP '^\s*@?@?\|\|[a-zA-Z0-9._-]+\^?' "$out" 2>/dev/null | sed 's/^@*||//; s/\^$//' > "$TMPDIR/ext_${i}_$$.txt" || true
-      grep -E '^\s*(0\.0\.0\.0|127\.0\.0\.1|::)\s+' "$out" 2>/dev/null | awk '{print $2}' >> "$TMPDIR/ext_${i}_$$.txt" || true
-      grep -E '^[a-zA-Z0-9._-]+\.[a-zA-Z]{2,}$' "$out" 2>/dev/null >> "$TMPDIR/ext_${i}_$$.txt" || true
-      progress_step "✅ ${bytes} bytes, ${count} 域名" "$url"
-    else
-      progress_step "❌ 跳过" "$url"
-      rm -f "$out"
-    fi
-  ) &
-  WORKER=$((WORKER + 1))
-  if [ $WORKER -ge $MAX_PARALLEL ]; then wait -n 2>/dev/null || true; WORKER=$((WORKER - 1)); fi
+  idx=$((i + 1))
+  out="$TMPDIR/dl_${idx}.txt"
+  if curl -sL --connect-timeout 10 --max-time $DOWNLOAD_TIMEOUT -o "$out" "$url" 2>/dev/null && [ -s "$out" ]; then
+    bytes=$(wc -c < "$out")
+    extract_from_file "$out" > "$TMPDIR/ext_${idx}.txt" 2>/dev/null || true
+    count=$(wc -l < "$TMPDIR/ext_${idx}.txt" 2>/dev/null || echo 0)
+    progress_step "✅ ${bytes} bytes, ${count} 域名" "$url"
+  else
+    progress_step "❌ 跳过" "$url"
+    rm -f "$out"
+  fi
 done
-wait
 
-# ---- 单次 awk 完成统计+筛选，无大文件 sort ----
-progress_step "合并 & 统计 & 筛选（流式）" ""
+# ---- 合并所有提取结果 ----
+progress_step "合并提取结果" ""
+cat "$TMPDIR"/ext_*.txt 2>/dev/null > "$TMPDIR/all_domains.txt" || true
+EXTRACTED=$(wc -l < "$TMPDIR/all_domains.txt" 2>/dev/null || echo 0)
+echo "  提取域名总数（含重复）: $EXTRACTED"
+
+# ---- 单次 awk 完成统计+筛选 ----
+progress_step "统计 & 筛选（单次 awk）" ""
 
 cat > "$TMPDIR/process.awk" << 'AWKEOF'
 BEGIN {
@@ -103,11 +109,11 @@ END {
 }
 AWKEOF
 
-cat "$TMPDIR"/ext_*.txt 2>/dev/null | awk -f "$TMPDIR/process.awk" 2> "$TMPDIR/stats.txt" \
+cat "$TMPDIR/all_domains.txt" | awk -f "$TMPDIR/process.awk" 2> "$TMPDIR/stats.txt" \
   | sort -u > "$DISTDIR/merged.txt.tmp" 2>/dev/null || true
 
 FINAL=$(wc -l < "$DISTDIR/merged.txt.tmp" 2>/dev/null || echo 0)
-echo "  统计: $(cat "$TMPDIR/stats.txt" 2>/dev/null)"
+echo "  $(cat "$TMPDIR/stats.txt" 2>/dev/null)"
 
 # ---- 输出最终文件 ----
 progress_step "生成最终文件" "规则数: $FINAL"
